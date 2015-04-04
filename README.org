@@ -1,0 +1,172 @@
+#+TITLE: cl-contracts
+#+AUTHOR: K. Isom <kyle@metacircular.net>
+
+* Introduction
+
+  This pacakge is a basic example of how to implement contracts
+  in Common Lisp. A contract is a specification of the behaviour
+  of a function, and in the case of this package, are implemented
+  as assertions.
+
+  A simple contract definition might look like the following:
+
+#+BEGIN_EXAMPLE
+(defcontract upcase (s)		; function name and arguments
+             #'stringp		; argument contract
+             (lambda (in out)   ; output contract
+                (declare (ignore in))
+                (stringp out))
+             (string-upcase s)) ; function body
+
+#+END_EXAMPLE
+
+  This defines a function named ~upcase~ that takes a single argument
+  ~s~. The argument contract asserts that its input will be a string
+  and that its output will also be a string. Note that the argument
+  contract takes as many arguments as the function arguments: ~upcase~
+  is a function of one argument (~s~), and ~#'STRINGP~ is a function
+  of one argument.
+
+  Perhaps more useful is to observe the macro expansion of the above
+  example:
+
+#+BEGIN_EXAMPLE
+CL-CONTRACTS> (macroexpand-1
+ '(defcontract upcase (s)
+   #'stringp		; argument contract
+   (lambda (in out)   ; output contract
+     (declare (ignore in))
+     (stringp out))
+   (string-upcase s)))
+(DEFUN UPCASE (S)
+  (ASSERT (FUNCALL #'STRINGP S))
+  (LET ((#:G1029 (PROGN (STRING-UPCASE S))))
+    (ASSERT
+     (FUNCALL (LAMBDA (IN OUT) (DECLARE (IGNORE IN)) (STRINGP OUT)) S #:G1029))
+    #:G1029))
+T
+#+END_EXAMPLE
+
+* Variations on a theme: string upcasing
+
+  Here's a simple exploration of what ~defcontract~ looks like in
+  use. I'll begin with the simplest possible contract: no contract.
+
+#+BEGIN_EXAMPLE
+(defcontract upcase (s)
+    nil nil ; no contracts
+  (string-upcase s))
+#+END_EXAMPLE
+
+  The nil contracts means that no assertions are inserted into the
+  resulting function.
+
+#+BEGIN_EXAMPLE
+CL-USER> (macroexpand-1
+	       '(defcontract upcase (s)
+                    nil nil ; no contracts
+                    (string-upcase s)))
+CL-USER> (DEFUN UPCASE (S)
+  NIL
+  (LET ((#:G1035 (PROGN (STRING-UPCASE S))))
+    NIL
+    #:G1035))
+T
+#+END_EXAMPLE
+
+#+BEGIN_EXAMPLE
+CL-USER> (upcase "hello, world")
+"HELLO, WORLD"
+CL-USER> (upcase 1)
+; Evaluation aborted on #<TYPE-ERROR expected-type:
+             (OR (VECTOR CHARACTER) (VECTOR NIL) BASE-STRING SYMBOL CHARACTER)
+             datum: 1>.
+#+END_EXAMPLE
+
+  When it fails, it fails when it actually attempts to call the
+  ~string-upcase~ function; while no damage is done here, it's
+  possible that providing the wrong type could be damaging in other
+  cases.
+  
+  A simple argument checker might check that the function received
+  only a string argument.
+
+#+BEGIN_EXAMPLE
+(defcontract upcase% (s)
+    #'stringp ; argument checker
+    nil       ; still not checking the output
+  (string-upcase s))
+
+(macroexpand-1 '(defcontract upcase% (s)
+                                  #'stringp ; argument checker
+                                  nil       ; still not checking the output
+                                 (string-upcase s)))
+(DEFUN UPCASE% (S)
+  (ASSERT (FUNCALL #'STRINGP S))
+  (LET ((#:G1036 (PROGN (STRING-UPCASE S))))
+    NIL
+    #:G1036))
+T
+#+END_EXAMPLE
+
+  The function body now has an argument contract assertion in place,
+  as seen in the expansion.
+
+#+BEGIN_EXAMPLE
+CL-USER> (upcase% "hello, world")
+"HELLO, WORLD"
+CL-USER> (upcase% 1)
+; Evaluation aborted on #<SIMPLE-ERROR "~@<The assertion ~S failed~:[.~:; ~
+                                    with ~:*~{~{~S = ~S~}~^, ~}.~]~:@>" {10059E0E93}>.
+#+END_EXAMPLE
+
+  The argument failed to uphold the argument contract, and the
+  function signalled an assertion failure.
+  
+  The function that checks the output receives a copy of the
+  arguments and the result of the body. This means that it can
+  compare the arguments against the output to verify that the
+  correct behaviour occurred.
+
+#+BEGIN_EXAMPLE
+(defcontract upcase%% (s)
+    #'stringp               ; looking for strings
+    (lambda (in out)        ; always produce a string
+      (declare (ignore in))
+      (stringp out))
+  (string-upcase s))
+#+END_EXAMPLE
+
+  In the previous example, the output contract will always be
+  upheld. We can see that because ~string-upcase~ always returns a
+  string, and we always get a string to ~string-upcase~, the
+  function will always return a string.
+  
+  The fact that the output contract checker receives the arguments
+  as well as the output means that the function can be verified to
+  always return a string that is the same length as the input
+  string.
+
+#+BEGIN_EXAMPLE
+(defun string-output-contract (in out)
+    (and (stringp out)
+	 (eql (length in)
+	      (length out))))
+
+(defcontract upcase%%% (s)
+    #'stringp
+    #'string-output-contract
+  (string-upcase s))
+#+END_EXAMPLE
+
+  The previous function will always satisfy this contract, but the
+  following will always fail.
+
+#+BEGIN_EXAMPLE
+(defcontract upcase%%%% (s)
+  #'stringp
+  #'string-output-contract
+  (let ((s* (string-upcase s)))
+    (concatenate 'string s* s*)))
+#+END_EXAMPLE
+
